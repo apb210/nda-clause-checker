@@ -6,10 +6,18 @@ import fitz  # PyMuPDF
 import docx
 import pandas as pd
 from io import StringIO
-from sentence_transformers import SentenceTransformer, util
+from transformers import AutoTokenizer, AutoModel
+import torch
+from torch.nn.functional import cosine_similarity
 
-# Load the sentence transformer model
-model = SentenceTransformer('all-MiniLM-L6-v2')
+# Load LegalBERT tokenizer and model
+@st.cache_resource
+def load_legalbert():
+    tokenizer = AutoTokenizer.from_pretrained("nlpaueb/legal-bert-base-uncased")
+    model = AutoModel.from_pretrained("nlpaueb/legal-bert-base-uncased")
+    return tokenizer, model
+
+tokenizer, legalbert_model = load_legalbert()
 
 # Adjustable truncation length
 truncate_length = st.sidebar.slider("Truncate clause length (characters)", min_value=200, max_value=2000, value=800, step=100)
@@ -57,18 +65,26 @@ def extract_text_from_docx(file):
 def extract_clauses(text):
     return re.split(r'\.\s+', text.strip())
 
+# Compute embedding using LegalBERT
+def embed_text(text):
+    inputs = tokenizer(text, padding=True, truncation=True, return_tensors="pt")
+    with torch.no_grad():
+        outputs = legalbert_model(**inputs)
+    embeddings = outputs.last_hidden_state.mean(dim=1)  # mean pooling
+    return embeddings
+
 # Compare clauses
 def compare_clauses(extracted_clauses, standard_clauses):
     results = []
     for label, std_clause in standard_clauses.items():
         best_match = None
         best_score = -1
+        std_embedding = embed_text(std_clause)
         for clause in extracted_clauses:
             if len(clause.strip()) < 20:
                 continue
-            emb1 = model.encode(std_clause, convert_to_tensor=True)
-            emb2 = model.encode(clause.strip(), convert_to_tensor=True)
-            score = util.pytorch_cos_sim(emb1, emb2).item()
+            clause_embedding = embed_text(clause.strip())
+            score = cosine_similarity(std_embedding, clause_embedding).item()
             if score > best_score:
                 best_score = score
                 best_match = clause.strip()
