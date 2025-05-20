@@ -16,7 +16,7 @@ standard_clauses = {
     "Term Clause": "This Agreement shall terminate upon written notice or after 2 years.",
     "Return Clause": "The Receiving Party agrees to return or destroy all confidential materials upon termination.",
     "Jurisdiction Clause": "This Agreement shall be governed by the laws of the State of Delaware.",
-   # "Confidentiality Clause": "The Receiving Party shall not disclose any Confidential Information to third parties."
+    "Confidentiality Clause": "The Receiving Party shall not disclose any Confidential Information to third parties."
 }
 
 # Extract text from PDF
@@ -75,8 +75,8 @@ def generate_pdf_report(data):
         pdf.ln(4)
 
     buffer = BytesIO()
-    pdf.output(dest='S').encode('latin1')  # get string output
-    buffer.write(pdf.output(dest='S').encode('latin1'))
+    pdf_output = pdf.output(dest='S').encode('utf-8', errors='replace')
+    buffer.write(pdf_output)
     buffer.seek(0)
     return buffer
 
