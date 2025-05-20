@@ -1,7 +1,8 @@
 streamlit
-transformers
 sentence-transformers
+torch
 PyMuPDF
 python-docx
 pandas
-fpdf
+matplotlib
+seaborn
