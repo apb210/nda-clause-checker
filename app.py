@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import streamlit as st
 import fitz  # PyMuPDF
 import docx
@@ -11,13 +12,32 @@ from fpdf import FPDF
 # Load the sentence transformer model
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Standard clauses for comparison
-standard_clauses = {
-    "Term Clause": "This Agreement shall terminate upon written notice or after 2 years.",
-    "Return Clause": "The Receiving Party agrees to return or destroy all confidential materials upon termination.",
-    "Jurisdiction Clause": "This Agreement shall be governed by the laws of the State of Delaware.",
-    "Confidentiality Clause": "The Receiving Party shall not disclose any Confidential Information to third parties."
-}
+# Load default standard clauses from file system
+@st.cache_data
+def load_default_standard_clauses(path="standard_clauses.txt"):
+    with open(path, "r", encoding="utf-8") as f:
+        return parse_standard_clauses_from_txt(f, is_uploaded=False)
+
+# Parse clauses from .txt file
+@st.cache_data
+def parse_standard_clauses_from_txt(file, is_uploaded=True):
+    text = file.read().decode("utf-8") if is_uploaded else file.read()
+    clauses = {}
+    current_title = None
+    current_text = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line and re.match(r"^\d+\.\s", line):
+            if current_title and current_text:
+                clauses[current_title] = " ".join(current_text).strip()
+            parts = line.split(".", 1)
+            current_title = parts[1].strip()
+            current_text = []
+        elif current_title:
+            current_text.append(line)
+    if current_title and current_text:
+        clauses[current_title] = " ".join(current_text).strip()
+    return clauses
 
 # Extract text from PDF
 @st.cache_data
@@ -36,7 +56,7 @@ def extract_clauses(text):
     return re.split(r'\.\s+', text.strip())
 
 # Compare clauses
-def compare_clauses(extracted_clauses):
+def compare_clauses(extracted_clauses, standard_clauses):
     results = []
     for label, std_clause in standard_clauses.items():
         best_match = None
@@ -83,6 +103,14 @@ def generate_pdf_report(data):
 # Streamlit UI
 st.title("NDA Clause Checker")
 
+st.markdown("You may upload your own standard clause file below or continue using the default.")
+custom_clause_file = st.file_uploader("Optional: Upload Custom Standard Clauses (.txt format)", type=["txt"])
+
+if custom_clause_file:
+    standard_clauses = parse_standard_clauses_from_txt(custom_clause_file, is_uploaded=True)
+else:
+    standard_clauses = load_default_standard_clauses()
+
 uploaded_file = st.file_uploader("Upload an NDA (PDF or DOCX)", type=["pdf", "docx"])
 
 if uploaded_file:
@@ -95,7 +123,7 @@ if uploaded_file:
         st.error("Unsupported file type.")
 
     clauses = extract_clauses(text)
-    results = compare_clauses(clauses)
+    results = compare_clauses(clauses, standard_clauses)
 
     st.subheader("Clause Comparison Report")
     data = []
