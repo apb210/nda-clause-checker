@@ -5,22 +5,27 @@ import streamlit as st
 import fitz  # PyMuPDF
 import docx
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 from io import StringIO
-from transformers import AutoTokenizer, AutoModel
-import torch
-from torch.nn.functional import cosine_similarity
+from sentence_transformers import SentenceTransformer, util
+import hashlib
 
-# Load LegalBERT tokenizer and model
+# Load faster sentence-transformer model
 @st.cache_resource
-def load_legalbert():
-    tokenizer = AutoTokenizer.from_pretrained("nlpaueb/legal-bert-base-uncased")
-    model = AutoModel.from_pretrained("nlpaueb/legal-bert-base-uncased")
-    return tokenizer, model
+def load_model():
+    return SentenceTransformer("all-mpnet-base-v2")
 
-tokenizer, legalbert_model = load_legalbert()
+model = load_model()
 
-# Adjustable truncation length
+# Adjustable truncation and similarity threshold
 truncate_length = st.sidebar.slider("Truncate clause length (characters)", min_value=200, max_value=2000, value=800, step=100)
+similarity_threshold = st.sidebar.slider("Minimum similarity threshold", min_value=0.0, max_value=1.0, value=0.85, step=0.01)
+
+# Embedding cache
+@st.cache_data(show_spinner=False)
+def cached_embedding(text):
+    return model.encode(text, convert_to_tensor=True)
 
 # Load and parse clause sets from directory
 def load_clause_set(filename):
@@ -65,35 +70,29 @@ def extract_text_from_docx(file):
 def extract_clauses(text):
     return re.split(r'\.\s+', text.strip())
 
-# Compute embedding using LegalBERT
-def embed_text(text):
-    inputs = tokenizer(text, padding=True, truncation=True, return_tensors="pt")
-    with torch.no_grad():
-        outputs = legalbert_model(**inputs)
-    embeddings = outputs.last_hidden_state.mean(dim=1)  # mean pooling
-    return embeddings
-
 # Compare clauses
+
 def compare_clauses(extracted_clauses, standard_clauses):
     results = []
+    heatmap_data = []
     for label, std_clause in standard_clauses.items():
-        best_match = None
-        best_score = -1
-        std_embedding = embed_text(std_clause)
+        std_embedding = cached_embedding(std_clause)
+        clause_scores = []
         for clause in extracted_clauses:
             if len(clause.strip()) < 20:
                 continue
-            clause_embedding = embed_text(clause.strip())
-            score = cosine_similarity(std_embedding, clause_embedding).item()
-            if score > best_score:
-                best_score = score
-                best_match = clause.strip()
-        if best_score == -1:
-            results.append((label, std_clause, "Clause not found", 0.0))
-        else:
+            clause_embedding = cached_embedding(clause.strip())
+            score = util.pytorch_cos_sim(std_embedding, clause_embedding).item()
+            clause_scores.append((clause, score))
+        if clause_scores:
+            best_match, best_score = max(clause_scores, key=lambda x: x[1])
             truncated_match = best_match[:truncate_length] + ("..." if len(best_match) > truncate_length else "")
             results.append((label, std_clause, truncated_match, round(best_score, 3)))
-    return results
+            heatmap_data.append([label] + [round(score, 2) for _, score in clause_scores])
+        else:
+            results.append((label, std_clause, "Clause not found", 0.0))
+            heatmap_data.append([label] + [0.0] * len(extracted_clauses))
+    return results, heatmap_data, extracted_clauses
 
 # Streamlit UI
 st.title("NDA Clause Checker")
@@ -128,7 +127,7 @@ if uploaded_file:
         st.error("Unsupported file type.")
 
     clauses = extract_clauses(text)
-    results = compare_clauses(clauses, standard_clauses)
+    results, heatmap_data, extracted_clauses = compare_clauses(clauses, standard_clauses)
 
     st.subheader("Clause Comparison Report")
     data = []
@@ -139,7 +138,7 @@ if uploaded_file:
         with st.expander("View Matched Clause"):
             st.markdown(match)
         st.markdown(f"**Similarity Score:** {score}")
-        if match == "Clause not found" or score < 0.85:
+        if match == "Clause not found" or score < similarity_threshold:
             st.warning("⚠️ FLAGGED: Missing or non-standard clause")
             status = "FLAGGED"
         else:
@@ -151,3 +150,11 @@ if uploaded_file:
     df = pd.DataFrame(data)
     csv = df.to_csv(index=False)
     st.download_button("Download Report as CSV", data=csv, file_name="nda_clause_report.csv", mime="text/csv")
+
+    # Display heatmap
+    st.subheader("Clause Similarity Heatmap")
+    if heatmap_data:
+        heatmap_df = pd.DataFrame(heatmap_data, columns=["Standard Clause"] + [f"Clause {i+1}" for i in range(len(extracted_clauses))])
+        plt.figure(figsize=(min(18, 2 + len(extracted_clauses) * 0.5), min(12, 0.5 * len(standard_clauses))))
+        sns.heatmap(heatmap_df.iloc[:, 1:].astype(float), annot=True, xticklabels=True, yticklabels=heatmap_df["Standard Clause"].tolist(), cmap="YlGnBu")
+        st.pyplot(plt.gcf())
