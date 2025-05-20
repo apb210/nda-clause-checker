@@ -5,21 +5,21 @@ import streamlit as st
 import fitz  # PyMuPDF
 import docx
 import pandas as pd
-from io import StringIO, BytesIO
+from io import StringIO
 from sentence_transformers import SentenceTransformer, util
-from fpdf import FPDF
 
 # Load the sentence transformer model
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Load default standard clauses from file system
-@st.cache_data
-def load_default_standard_clauses(path="standard_clauses.txt"):
-    with open(path, "r", encoding="utf-8") as f:
+# Adjustable truncation length
+truncate_length = st.sidebar.slider("Truncate clause length (characters)", min_value=200, max_value=2000, value=800, step=100)
+
+# Load and parse clause sets from directory
+def load_clause_set(filename):
+    with open(filename, "r", encoding="utf-8") as f:
         return parse_standard_clauses_from_txt(f, is_uploaded=False)
 
 # Parse clauses from .txt file
-@st.cache_data
 def parse_standard_clauses_from_txt(file, is_uploaded=True):
     text = file.read().decode("utf-8") if is_uploaded else file.read()
     clauses = {}
@@ -27,16 +27,18 @@ def parse_standard_clauses_from_txt(file, is_uploaded=True):
     current_text = []
     for line in text.splitlines():
         line = line.strip()
-        if line and re.match(r"^\d+\.\s", line):
+        if re.match(r"^\d+\.\s", line):
             if current_title and current_text:
-                clauses[current_title] = " ".join(current_text).strip()
+                clause_text = " ".join(current_text).strip()
+                clauses[current_title] = clause_text[:truncate_length] + ("..." if len(clause_text) > truncate_length else "")
             parts = line.split(".", 1)
             current_title = parts[1].strip()
             current_text = []
         elif current_title:
             current_text.append(line)
     if current_title and current_text:
-        clauses[current_title] = " ".join(current_text).strip()
+        clause_text = " ".join(current_text).strip()
+        clauses[current_title] = clause_text[:truncate_length] + ("..." if len(clause_text) > truncate_length else "")
     return clauses
 
 # Extract text from PDF
@@ -73,43 +75,30 @@ def compare_clauses(extracted_clauses, standard_clauses):
         if best_score == -1:
             results.append((label, std_clause, "Clause not found", 0.0))
         else:
-            results.append((label, std_clause, best_match, round(best_score, 3)))
+            truncated_match = best_match[:truncate_length] + ("..." if len(best_match) > truncate_length else "")
+            results.append((label, std_clause, truncated_match, round(best_score, 3)))
     return results
-
-# Generate PDF report
-
-def generate_pdf_report(data):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt="NDA Clause Comparison Report", ln=True, align="C")
-    pdf.ln(10)
-
-    for row in data:
-        pdf.set_font("Arial", style="B", size=11)
-        pdf.cell(200, 8, txt=f"{row['Clause Type']} ({row['Status']})", ln=True)
-        pdf.set_font("Arial", size=10)
-        pdf.multi_cell(0, 6, txt=f"Standard Clause: {row['Standard Clause']}")
-        pdf.multi_cell(0, 6, txt=f"Matched Clause: {row['Matched Clause']}")
-        pdf.cell(200, 6, txt=f"Similarity Score: {row['Similarity Score']}", ln=True)
-        pdf.ln(4)
-
-    buffer = BytesIO()
-    pdf_output = pdf.output(dest='S').encode('utf-8', errors='replace')
-    buffer.write(pdf_output)
-    buffer.seek(0)
-    return buffer
 
 # Streamlit UI
 st.title("NDA Clause Checker")
 
-st.markdown("You may upload your own standard clause file below or continue using the default.")
+# Clause set dropdown
+clause_set_options = {
+    "Default": "standard_clauses.txt",
+    "Alternate Set A": "alternate_clauses_a.txt",
+    "Alternate Set B": "alternate_clauses_b.txt"
+}
+
+selected_clause_file = st.selectbox("Select a standard clause set", options=list(clause_set_options.keys()))
+
+# Optional upload override
 custom_clause_file = st.file_uploader("Optional: Upload Custom Standard Clauses (.txt format)", type=["txt"])
 
 if custom_clause_file:
     standard_clauses = parse_standard_clauses_from_txt(custom_clause_file, is_uploaded=True)
 else:
-    standard_clauses = load_default_standard_clauses()
+    clause_path = clause_set_options[selected_clause_file]
+    standard_clauses = load_clause_set(clause_path)
 
 uploaded_file = st.file_uploader("Upload an NDA (PDF or DOCX)", type=["pdf", "docx"])
 
@@ -129,9 +118,11 @@ if uploaded_file:
     data = []
     for label, std, match, score in results:
         st.markdown(f"**{label}**")
-        st.markdown(f"- **Standard:** {std}")
-        st.markdown(f"- **Matched:** {match}")
-        st.markdown(f"- **Similarity Score:** {score}")
+        with st.expander("View Standard Clause"):
+            st.markdown(std)
+        with st.expander("View Matched Clause"):
+            st.markdown(match)
+        st.markdown(f"**Similarity Score:** {score}")
         if match == "Clause not found" or score < 0.85:
             st.warning("⚠️ FLAGGED: Missing or non-standard clause")
             status = "FLAGGED"
@@ -144,7 +135,3 @@ if uploaded_file:
     df = pd.DataFrame(data)
     csv = df.to_csv(index=False)
     st.download_button("Download Report as CSV", data=csv, file_name="nda_clause_report.csv", mime="text/csv")
-
-    # Download as PDF
-    pdf_buffer = generate_pdf_report(data)
-    st.download_button("Download Report as PDF", data=pdf_buffer, file_name="nda_clause_report.pdf", mime="application/pdf")
