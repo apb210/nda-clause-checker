@@ -1,0 +1,6 @@
+streamlit
+sentence-transformers
+PyMuPDF
+python-docx
+pandas
+fpdf
