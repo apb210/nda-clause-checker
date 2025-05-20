@@ -74,7 +74,7 @@ def generate_pdf_report(data):
         pdf.ln(4)
 
     buffer = BytesIO()
-    pdf.output(buffer)
+    pdf.output(name=buffer)
     buffer.seek(0)
     return buffer
 
