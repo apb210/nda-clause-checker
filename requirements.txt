@@ -1,4 +1,5 @@
 streamlit
+transformers
 sentence-transformers
 PyMuPDF
 python-docx
