@@ -71,7 +71,6 @@ def extract_clauses(text):
     return re.split(r'\.\s+', text.strip())
 
 # Compare clauses
-
 def compare_clauses(extracted_clauses, standard_clauses):
     results = []
     heatmap_data = []
@@ -154,7 +153,19 @@ if uploaded_file:
     # Display heatmap
     st.subheader("Clause Similarity Heatmap")
     if heatmap_data:
-        heatmap_df = pd.DataFrame(heatmap_data, columns=["Standard Clause"] + [f"Clause {i+1}" for i in range(len(extracted_clauses))])
-        plt.figure(figsize=(min(18, 2 + len(extracted_clauses) * 0.5), min(12, 0.5 * len(standard_clauses))))
-        sns.heatmap(heatmap_df.iloc[:, 1:].astype(float), annot=True, xticklabels=True, yticklabels=heatmap_df["Standard Clause"].tolist(), cmap="YlGnBu")
+        max_cols = max(len(row) for row in heatmap_data)
+        for row in heatmap_data:
+            row += [0.0] * (max_cols - len(row))
+
+        clause_labels = [f"Clause {i}" for i in range(1, max_cols)]
+        heatmap_df = pd.DataFrame(heatmap_data, columns=["Standard Clause"] + clause_labels)
+
+        plt.figure(figsize=(min(18, 2 + len(clause_labels) * 0.5), min(12, 0.5 * len(standard_clauses))))
+        sns.heatmap(
+            heatmap_df.iloc[:, 1:].astype(float),
+            annot=True,
+            xticklabels=True,
+            yticklabels=heatmap_df["Standard Clause"].tolist(),
+            cmap="YlGnBu"
+        )
         st.pyplot(plt.gcf())
