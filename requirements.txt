@@ -1,8 +1,6 @@
-streamlit
-sentence-transformers
-torch
-PyMuPDF
-python-docx
-pandas
-matplotlib
-seaborn
+streamlit==1.33.0
+python-docx==1.1.0
+pdfplumber==0.10.3
+mammoth==1.6.0
+sentence-transformers==2.6.1
+torch>=1.13.0
