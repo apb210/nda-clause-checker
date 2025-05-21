@@ -1,9 +1,10 @@
-from docx import Document
-import re
 import streamlit as st
+import re
+from io import BytesIO
+from docx import Document
+import pdfplumber
 from sentence_transformers import SentenceTransformer, util
 
-# Load model once
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
 EXPECTED_CLAUSES = {
@@ -29,25 +30,33 @@ EXPECTED_CLAUSES = {
     '20': "Allows execution in multiple counterparts including electronic."
 }
 
-def extract_clauses(docx_file):
-    doc = Document(docx_file)
-    clause_pattern = re.compile(r'^(\d{1,2})\.\s+(.*)')
+def extract_text_from_docx(file):
+    doc = Document(file)
+    return "\n".join([para.text for para in doc.paragraphs if para.text.strip()])
+
+def extract_text_from_pdf(file):
+    with pdfplumber.open(file) as pdf:
+        return "\n".join(page.extract_text() for page in pdf.pages if page.extract_text())
+
+def extract_clauses_from_text(text):
+    clause_pattern = re.compile(r'^(\d{1,2})\.\s+(.*)', re.MULTILINE)
+    lines = text.splitlines()
     clauses = {}
     current_number = None
     buffer = []
 
-    for para in doc.paragraphs:
-        text = para.text.strip()
-        if not text:
+    for line in lines:
+        line = line.strip()
+        if not line:
             continue
-        match = clause_pattern.match(text)
+        match = clause_pattern.match(line)
         if match:
             if current_number:
                 clauses[current_number] = ' '.join(buffer).strip()
             current_number = match.group(1)
             buffer = [match.group(2)]
         elif current_number:
-            buffer.append(text)
+            buffer.append(line)
 
     if current_number:
         clauses[current_number] = ' '.join(buffer).strip()
@@ -58,13 +67,13 @@ def nlp_compare(extracted, expected):
     similarity_results = {}
     missing_clauses = []
     expected_embeddings = model.encode(list(expected.values()), convert_to_tensor=True)
-    
+
     for i, (exp_key, exp_text) in enumerate(expected.items()):
         match_found = False
         for ext_key, ext_text in extracted.items():
             ext_embedding = model.encode(ext_text, convert_to_tensor=True)
             sim_score = float(util.pytorch_cos_sim(ext_embedding, expected_embeddings[i]))
-            if sim_score > 0.65:  # Adjust this threshold if needed
+            if sim_score > 0.65:
                 match_found = True
                 similarity_results[exp_key] = (sim_score, ext_key, ext_text)
                 break
@@ -75,30 +84,40 @@ def nlp_compare(extracted, expected):
     return similarity_results, missing_clauses
 
 def main():
-    st.title("📄 NDA Clause Auditor with NLP")
+    st.title("📄 NDA Clause Auditor (Docx & PDF Support)")
 
-    uploaded_file = st.file_uploader("Upload your NDA (.docx)", type="docx")
+    uploaded_file = st.file_uploader("Upload a .docx or .pdf file", type=["docx", "pdf"])
     if uploaded_file:
-        st.info("🔍 Extracting clauses...")
-        extracted = extract_clauses(uploaded_file)
+        ext = uploaded_file.name.split(".")[-1].lower()
+
+        with st.spinner("🔍 Reading document..."):
+            if ext == "docx":
+                text = extract_text_from_docx(uploaded_file)
+            elif ext == "pdf":
+                text = extract_text_from_pdf(uploaded_file)
+            else:
+                st.error("Unsupported file format.")
+                return
+
+        clauses = extract_clauses_from_text(text)
 
         st.subheader("✅ Extracted Clauses")
-        for num, text in extracted.items():
-            st.markdown(f"**Clause {num}:** {text}")
+        for k in sorted(clauses.keys(), key=int):
+            st.markdown(f"**Clause {k}**: {clauses[k]}")
 
-        st.subheader("🤖 Comparing Using NLP")
-        similarities, missing = nlp_compare(extracted, EXPECTED_CLAUSES)
+        st.subheader("🤖 NLP-Based Clause Comparison")
+        similarities, missing = nlp_compare(clauses, EXPECTED_CLAUSES)
 
-        for num in sorted(EXPECTED_CLAUSES.keys(), key=int):
-            summary = EXPECTED_CLAUSES[num]
-            sim_score, matched_clause, text = similarities[num]
+        for k in sorted(EXPECTED_CLAUSES.keys(), key=int):
+            summary = EXPECTED_CLAUSES[k]
+            sim_score, _, clause_text = similarities[k]
             if sim_score == 0.0:
-                st.error(f"❌ Missing Clause {num}: {summary}")
+                st.error(f"❌ Missing Clause {k}: {summary}")
             else:
-                st.success(f"✅ Clause {num} matched (Score: {sim_score:.2f})")
+                st.success(f"✅ Clause {k} matched (Similarity: {sim_score:.2f})")
 
         if not missing:
-            st.success("🎉 All expected clauses were contextually identified!")
+            st.balloons()
 
 if __name__ == "__main__":
     main()
