@@ -1,15 +1,13 @@
 import streamlit as st
 import re
-import pdfplumber
 import mammoth
+import fitz  # PyMuPDF
 from io import BytesIO
 from docx import Document
 from sentence_transformers import SentenceTransformer, util
 
-# Load NLP model once
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Expected clauses
 EXPECTED_CLAUSES = {
     '1': "Defines what constitutes confidential information.",
     '2': "Lists exceptions to what is considered confidential.",
@@ -37,13 +35,13 @@ def extract_text_from_docx(file):
     doc = Document(file)
     return "\n".join([para.text for para in doc.paragraphs if para.text.strip()])
 
-def extract_text_from_pdf(file):
-    with pdfplumber.open(file) as pdf:
-        return "\n".join(page.extract_text() for page in pdf.pages if page.extract_text())
-
 def extract_text_from_doc(file):
     result = mammoth.extract_raw_text(file)
     return result.value
+
+def extract_text_from_pdf(file):
+    with fitz.open(stream=file.read(), filetype="pdf") as doc:
+        return "\n".join(page.get_text() for page in doc)
 
 def extract_clauses_from_text(text):
     clause_pattern = re.compile(r'^(\d{1,2})\.\s+(.*)', re.MULTILINE)
@@ -91,13 +89,13 @@ def nlp_compare(extracted, expected):
     return similarity_results, missing_clauses
 
 def main():
-    st.title("📄 NDA Clause Auditor (doc, docx, pdf)")
+    st.title("📄 NDA Clause Auditor (doc, docx, pdf using fitz)")
 
     uploaded_file = st.file_uploader("Upload a .doc, .docx or .pdf file", type=["doc", "docx", "pdf"])
     if uploaded_file:
         ext = uploaded_file.name.split(".")[-1].lower()
 
-        with st.spinner("🔍 Reading document..."):
+        with st.spinner("🔍 Extracting text..."):
             if ext == "docx":
                 text = extract_text_from_docx(uploaded_file)
             elif ext == "pdf":
