@@ -1,12 +1,15 @@
 import streamlit as st
 import re
+import pdfplumber
+import mammoth
 from io import BytesIO
 from docx import Document
-import pdfplumber
 from sentence_transformers import SentenceTransformer, util
 
+# Load NLP model once
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
+# Expected clauses
 EXPECTED_CLAUSES = {
     '1': "Defines what constitutes confidential information.",
     '2': "Lists exceptions to what is considered confidential.",
@@ -37,6 +40,10 @@ def extract_text_from_docx(file):
 def extract_text_from_pdf(file):
     with pdfplumber.open(file) as pdf:
         return "\n".join(page.extract_text() for page in pdf.pages if page.extract_text())
+
+def extract_text_from_doc(file):
+    result = mammoth.extract_raw_text(file)
+    return result.value
 
 def extract_clauses_from_text(text):
     clause_pattern = re.compile(r'^(\d{1,2})\.\s+(.*)', re.MULTILINE)
@@ -84,9 +91,9 @@ def nlp_compare(extracted, expected):
     return similarity_results, missing_clauses
 
 def main():
-    st.title("📄 NDA Clause Auditor (Docx & PDF Support)")
+    st.title("📄 NDA Clause Auditor (doc, docx, pdf)")
 
-    uploaded_file = st.file_uploader("Upload a .docx or .pdf file", type=["docx", "pdf"])
+    uploaded_file = st.file_uploader("Upload a .doc, .docx or .pdf file", type=["doc", "docx", "pdf"])
     if uploaded_file:
         ext = uploaded_file.name.split(".")[-1].lower()
 
@@ -95,6 +102,8 @@ def main():
                 text = extract_text_from_docx(uploaded_file)
             elif ext == "pdf":
                 text = extract_text_from_pdf(uploaded_file)
+            elif ext == "doc":
+                text = extract_text_from_doc(uploaded_file)
             else:
                 st.error("Unsupported file format.")
                 return
